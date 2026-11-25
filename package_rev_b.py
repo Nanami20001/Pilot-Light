@@ -1,11 +1,18 @@
-"""Reopen the coordinated Rev B exports and package CAD, PCB, and cut sheets."""
+"""Verify Rev B CAD, rebuild CH552 firmware, and package the release."""
 from pathlib import Path
+import argparse
 import hashlib
+from io import BytesIO
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
+
+from firmware.verify_ws2812 import read_hex, symbols, trace, verify
 
 sys.path.append(os.environ.get("FREECAD_LIB", r"E:\freecad\lib"))
 import FreeCAD
@@ -14,6 +21,12 @@ import Mesh
 from PIL import Image
 
 root = Path(__file__).resolve().parent
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--sdcc", type=Path, default=Path(r"E:\SDCC\bin\sdcc.exe"))
+sdcc = parser.parse_args().sdcc.absolute()
+powershell = shutil.which("pwsh") or shutil.which("powershell")
+if powershell is None:
+    raise SystemExit("PowerShell is required to run the firmware makefiles.")
 pcb = root / "hardware/sl25_rev_b"
 case = root / "enclosure/sl25_traffic_rev_b"
 assert json.loads((pcb / "checks/verification.json").read_text())["passed"]
@@ -22,6 +35,7 @@ assert validation["passed"], validation["failures"]
 assert validation["enclosure_size_mm"] == [30, 30, 40]
 assert validation["hood_profile"]["top_projection_mm"] == 15
 assert validation["clearances_mm"]["required_LED_tip_to_diffuser"] >= 13.5
+assert validation["screw_alignment"].keys() == {"H1", "H2"}
 result = {"stl_reopen": {}, "step_reopen": {}, "svg_cut_contours": {}, "previews": {}}
 for path in sorted((case / "stl").glob("*.stl")):
     mesh = Mesh.Mesh(str(path))
@@ -57,28 +71,6 @@ for path in list((case / "preview").glob("*.png")) + list((pcb / "preview").glob
 result["passed"] = True
 (case / "checks/export_verification.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
 
-files = []
-for folder in (pcb, case):
-    files += [p for p in folder.rglob("*") if p.is_file()
-              and p.suffix not in (".FCBak", ".pyc", ".kicad_prl", ".lck")
-              and "__pycache__" not in p.parts and p.name != "SHA256SUMS.json"]
-files += [root / "hardware" / name for name in
-          ("generate_board.py", "generate_rev_b.py", "route_board.py", "route_rev_b.py", "finish_board.py", "verify_rev_b.py")]
-files += [root / "hardware/reference" / name for name in ("CH552.pdf", "USB4105.pdf", "WS2812B-V5.pdf")]
-files += [root / "CURRENT_DESIGN.md", root / "package_rev_b.py"]
-hashes = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(files)}
-checksum = case / "SHA256SUMS.json"
-checksum.write_text(json.dumps(hashes, indent=2), encoding="utf-8")
-files.append(checksum)
-complete = root / "SL25-RevB-complete.zip"
-with zipfile.ZipFile(complete, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-    for path in sorted(files):
-        archive.write(path, "SL25-RevB/" + path.relative_to(root).as_posix())
-with zipfile.ZipFile(complete) as archive:
-    assert archive.testzip() is None
-    for name, expected in hashes.items():
-        assert hashlib.sha256(archive.read("SL25-RevB/" + name)).hexdigest() == expected
-
 gerbers = root / "hardware/SL25-RevB-gerbers.zip"
 with zipfile.ZipFile(gerbers, "w", zipfile.ZIP_DEFLATED) as archive:
     for path in (pcb / "fabrication").iterdir():
@@ -93,6 +85,87 @@ with zipfile.ZipFile(printable, "w", zipfile.ZIP_DEFLATED) as archive:
     archive.write(case / "README.md", "README.md")
     archive.write(case / "preview/dimensions.png", "dimensions.png")
     archive.write(case / "preview/hood_profile.png", "hood_profile.png")
+
+files = [gerbers, printable, root / "README.md", root / "CURRENT_DESIGN.md",
+         root / "package_rev_b.py", root / "启动状态灯.cmd"]
+for folder in (pcb, case):
+    files += [p for p in folder.rglob("*") if p.is_file()
+              and p.suffix.lower() not in (".fcbak", ".pyc", ".kicad_prl", ".lck")
+              and not any(part.startswith("package_staging_") for part in p.parts)
+              and "__pycache__" not in p.parts and p.name not in ("SHA256SUMS.json", "stl.zip")
+              and not p.name.startswith(("audit-", "connection-check"))]
+files += [root / "hardware" / name for name in
+          ("generate_board.py", "generate_rev_b.py", "route_board.py", "route_rev_b.py", "finish_board.py", "verify_rev_b.py")]
+files += [root / "hardware/reference" / name for name in ("CH552.pdf", "USB4105.pdf", "WS2812B-V5.pdf")]
+files += [root / "host" / name for name in
+          ("README.md", "package.json", "package-lock.json", "codex_status_agent.mjs", "codex_status_agent.test.mjs")]
+files += [root / "firmware" / name for name in
+          ("FIRMWARE_DIAGNOSIS.md", "common/ws2812_ch552.h", "test_firmware_logic.py", "verify_ws2812.py")]
+
+targets = [
+    ("ch552_codex_status", "build", "sl25_codex_status", (), True),
+    ("ch552_led_diagnostic", "build", "sl25_led_diagnostic", (), True),
+    ("ch552_led_diagnostic", "build", "sl25_gpio_probe", ("-GpioProbe",), False),
+    ("ch552_ws2812_demo", "build-white", "sl25_ws2812_white", (), False),
+]
+for project in {target[0] for target in targets}:
+    files += [root / "firmware" / project / name for name in ("main.c", "Makefile.ps1", "README.md")]
+
+complete = root / "SL25-RevB-complete.zip"
+checksum = case / "SHA256SUMS.json"
+with tempfile.TemporaryDirectory(prefix=".sl25-package-", dir=root) as directory:
+    stage = Path(directory)
+    entries = {path.relative_to(root).as_posix(): path for path in files}
+    report = {"sdcc": subprocess.check_output([str(sdcc), "--version"], text=True).splitlines()[0],
+              "firmware": {}}
+    for project, folder, stem, switches, verify_timing in targets:
+        source = root / "firmware" / project
+        release_path = Path("firmware") / project / folder
+        out = stage / release_path
+        subprocess.run([powershell, "-NoProfile", "-File", str(source / "Makefile.ps1"),
+                        "-Sdcc", str(sdcc), "-OutDir", str(out), *switches], check=True, cwd=source)
+        binary = out / (stem + ".hex")
+        memory = read_hex(binary)
+        assert 0 in memory, f"Missing reset vector in {binary}"
+        details = {"flash_bytes": len(memory), "highest_address": hex(max(memory)),
+                   "intel_hex_checksums": "passed"}
+        if verify_timing:
+            timing = verify(binary)
+            del timing["file"]
+            details["ws2812_instruction_timing"] = timing
+            listing = binary.with_suffix(".rst")
+            entries[listing.relative_to(stage).as_posix()] = listing
+        elif project == "ch552_ws2812_demo":
+            listing = binary.with_suffix(".rst")
+            edges, _, _ = trace(memory, symbols(listing)["_ws_white"])
+            low_ns = {round((rise[0] - fall[0]) * 1000 / 24, 2)
+                      for fall, rise in zip(edges[1::2], edges[2::2])}
+            details["ws2812_instruction_timing"] = {
+                "result": "Experimental full-white demo",
+                "T1L_ns_at_24MHz": sorted(low_ns), "RGB_diagnostic_T1L_min_ns": 580,
+            }
+        name = binary.relative_to(stage).as_posix()
+        report["firmware"][name] = details
+        entries[name] = binary
+
+    report_path = stage / "firmware_checks.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    entries["firmware/firmware_checks.json"] = report_path
+    hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in sorted(entries.items())}
+    manifest = json.dumps(hashes, indent=2)
+    bundle = BytesIO()
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for name, path in sorted(entries.items()):
+            archive.write(path, "SL25-RevB/" + name)
+        archive.writestr("SL25-RevB/" + checksum.relative_to(root).as_posix(), manifest)
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.testzip() is None
+        for name, expected in hashes.items():
+            assert hashlib.sha256(archive.read("SL25-RevB/" + name)).hexdigest() == expected
+    with complete.open("wb") as output:
+        output.write(bundle.getbuffer())
+    checksum.write_text(manifest, encoding="utf-8")
+
 for path in (complete, gerbers, printable):
     with zipfile.ZipFile(path) as archive:
         assert archive.testzip() is None

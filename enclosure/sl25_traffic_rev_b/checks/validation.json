@@ -4,7 +4,7 @@
     "01_rear_cover": {
       "valid_brep": true,
       "solid_count": 1,
-      "volume_mm3": 2259.006,
+      "volume_mm3": 2245.477,
       "assembly_bounds": [
         0.0,
         0.0,
@@ -15,7 +15,7 @@
       ],
       "mesh_watertight": true,
       "has_nonmanifold_edges": false,
-      "facets": 3380,
+      "facets": 3340,
       "print_bounds": [
         0.0,
         0.0,
@@ -28,7 +28,7 @@
     "02_front_housing": {
       "valid_brep": true,
       "solid_count": 1,
-      "volume_mm3": 3804.663,
+      "volume_mm3": 4012.098,
       "assembly_bounds": [
         0.0,
         0.0,
@@ -39,7 +39,7 @@
       ],
       "mesh_watertight": true,
       "has_nonmanifold_edges": false,
-      "facets": 3740,
+      "facets": 3244,
       "print_bounds": [
         0.0,
         0.0,
@@ -146,6 +146,80 @@
     "side_projection_mm": 4.805,
     "mounting_ring_mm": 0.8
   },
+  "screw_alignment": {
+    "H1": {
+      "target_xy_mm": [
+        5.2,
+        24.8
+      ],
+      "rear_clearance": {
+        "xy_mm": [
+          5.2,
+          24.8
+        ],
+        "axis_offset_mm": 0.0,
+        "diameter_mm": 2.5
+      },
+      "pcb_drill": {
+        "xy_mm": [
+          5.2,
+          24.8
+        ],
+        "axis_offset_mm": 0.0,
+        "diameter_mm": 2.2
+      },
+      "front_pilot": {
+        "xy_mm": [
+          5.2,
+          24.8
+        ],
+        "axis_offset_mm": 0.0,
+        "diameter_mm": 1.7,
+        "supported_arc_degrees": 274.06
+      },
+      "screw_interference_mm3": {
+        "rear_cover": 0.0,
+        "pcb_assembly": 0.0,
+        "mixing_cup": 0.0
+      }
+    },
+    "H2": {
+      "target_xy_mm": [
+        24.8,
+        24.8
+      ],
+      "rear_clearance": {
+        "xy_mm": [
+          24.8,
+          24.8
+        ],
+        "axis_offset_mm": 0.0,
+        "diameter_mm": 2.5
+      },
+      "pcb_drill": {
+        "xy_mm": [
+          24.8,
+          24.8
+        ],
+        "axis_offset_mm": 0.0,
+        "diameter_mm": 2.2
+      },
+      "front_pilot": {
+        "xy_mm": [
+          24.8,
+          24.8
+        ],
+        "axis_offset_mm": 0.0,
+        "diameter_mm": 1.7,
+        "supported_arc_degrees": 274.06
+      },
+      "screw_interference_mm3": {
+        "rear_cover": 0.0,
+        "pcb_assembly": 0.0,
+        "mixing_cup": 0.0
+      }
+    }
+  },
   "enclosure_bounds": [
     0.0,
     0.0,
@@ -189,6 +263,7 @@
       "interference_mm3": 0.0
     }
   ],
+  "optics_passage_interference_mm3": 0.0,
   "optics_rear_removal_sweep": [
     {
       "part": "mixing_cup",

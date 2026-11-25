@@ -100,8 +100,18 @@ def usb_tool():
 W, H, Z = P["width"], P["height"], P["depth"]
 wall, floor, seam = P["wall"], P["rear_floor"], P["pcb_bottom_z"]
 face, inner = P["face_z"], P["face_z"] - P["face_thickness"]
-board_top = seam + P["pcb_thickness"]
-mount_r = P["mount_boss_diameter"] / 2
+pcb_step = (ROOT / P["pcb_reference"]).resolve()
+pcb_interface = json.loads(pcb_step.with_name("interface.json").read_text(encoding="utf-8"))
+board = pcb_interface["board"]
+pcb_origin = App.Vector((W - board["width"]) / 2, (H + board["height"]) / 2, seam)
+pcb_holes = pcb_interface["mounting_holes"]
+# KiCad top view uses Y down. The STEP has already inverted that axis.
+mounts = [(pcb_origin.x + hole["x"], pcb_origin.y - hole["y"]) for hole in pcb_holes]
+board_top = seam + board["thickness"]
+rear_support_r = P["rear_support_diameter"] / 2
+screw_clearance_r = P["screw_clearance_diameter"] / 2
+head_r = P["rear_head_diameter"] / 2
+countersink_depth = head_r - screw_clearance_r  # 90-degree head
 cx, cy = P["lens_center"]
 
 # Rear tray supports the PCB at its mounting holes. Screws pass through the
@@ -118,16 +128,14 @@ rear_register_pocket = rounded(
     P["corner_radius"] - P["rear_register_lip"])
 rear = cut("Rear registration rabbet", rear, rear_register_pocket)
 rear_posts = [cylinder("PCB rear support", x, y, floor - 0.01,
-                       mount_r, seam - floor + 0.01) for x, y in P["mounts"]]
+                       rear_support_r, seam - floor + 0.01) for x, y in mounts]
 rear = fuse("Rear tray with supports", [rear] + rear_posts)
 rear_drills = []
-for x, y in P["mounts"]:
+for x, y in mounts:
     rear_drills += [cylinder("M2 clearance", x, y, -0.1,
-                            P["screw_clearance_diameter"] / 2, seam + 0.2),
+                            screw_clearance_r, seam + 0.2),
                     cone("90 degree countersink", x, y, 0,
-                         P["rear_head_diameter"] / 2,
-                         P["screw_clearance_diameter"] / 2,
-                         P["rear_countersink_depth"])]
+                         head_r, screw_clearance_r, countersink_depth)]
 rear = cut("Rear screw holes", rear, fuse("Rear drilling tools", rear_drills))
 rear = cut("01 Rear cover", rear, usb_tool())
 
@@ -152,8 +160,8 @@ rim_inside = rounded("Register inside", rim_offset + P["register_wall"],
                      P["corner_radius"] - rim_offset - P["register_wall"])
 rim = cut("Register wall", rim, rim_inside)
 reliefs = [cylinder("Register post relief", x, y, rim_z - 0.1,
-                    mount_r + 0.25, P["register_depth"] + 0.2)
-           for x, y in P["mounts"]]
+                    rear_support_r + 0.25, P["register_depth"] + 0.2)
+           for x, y in mounts]
 rim = cut("Register support clearances", rim, fuse("Register relief tools", reliefs))
 # Four corner keys locate the cover while leaving a circular exit for the cup.
 key_openings = [box("Side key opening", x, 10.5, rim_z - 0.1, 5, 9,
@@ -161,18 +169,33 @@ key_openings = [box("Side key opening", x, 10.5, rim_z - 0.1, 5, 9,
 key_openings += [box("End key opening", 10.5, y, rim_z - 0.1, 9, 5,
                      P["register_depth"] + 0.3) for y in (-1, 26)]
 rim = cut("Four corner register keys", rim, fuse("Cup exit tools", key_openings))
-posts = [cylinder("Front threaded boss", x, y, board_top,
-                  mount_r, inner - board_top + 0.05) for x, y in P["mounts"]]
+front_boss_r = P["front_boss_diameter"] / 2
+front_boss_depth = inner - board_top + 0.05
+posts = []
+for x, y in mounts:
+    posts.append(cylinder("Front threaded boss", x, y, board_top,
+                          front_boss_r, front_boss_depth))
+    side_x = wall - 0.05 if x < W / 2 else x
+    side_width = x - side_x if x < W / 2 else W - wall + 0.05 - x
+    posts.append(box("Front boss to side wall", side_x, y - front_boss_r, board_top,
+                     side_width, 2 * front_boss_r, front_boss_depth))
+optics_passage_r = max(P["mixing_cup_outer_front_radius"], P["diffuser_diameter"] / 2)
+optics_passage_r += P["optics_passage_radial_clearance"]
+# Relieve just the inner side of the bosses so the optics can pass straight
+# through. The resulting open pilot is backed by a web into each side wall.
+post_group = cut("Bosses relieved for optical stack", fuse("Front boss supports", posts),
+                 cylinder("Optical stack passage", cx, cy, board_top - 0.01,
+                          optics_passage_r, front_boss_depth + 0.02))
 guides = []
 for x in (wall, W - 2.25):
     for y in (6.0, 21.0):
         guides.append(box("PCB lateral guide", x, y, seam, 0.75, 3.0, 2.0))
 for x in (3.3, 22.4):
     guides.append(box("PCB lower edge stop", x, wall, seam, 4.3, 0.75, 1.6))
-front = fuse("Cup with rim bosses and guides", [front, rim] + posts + guides)
+front = fuse("Cup with rim bosses and guides", [front, rim, post_group] + guides)
 pilots = [cylinder("M2 pilot bore", x, y, board_top - 0.01,
                    P["screw_pilot_diameter"] / 2, P["screw_pilot_depth"] + 0.01)
-          for x, y in P["mounts"]]
+          for x, y in mounts]
 front = cut("Blind screw pilot holes", front, fuse("Pilot drill tools", pilots))
 front = cut("USB cable clearance", front, usb_tool())
 diffuser_stop_z = inner + P["diffuser_pocket_depth"]
@@ -232,15 +255,19 @@ gasket = cut("CUT SHEET - foam ring compressed 0.3mm",
                       P["lens_aperture_diameter"] / 2, P["gasket_compressed_thickness"] + 0.02))
 
 reference = feature("Part::Feature", "REFERENCE - SL25 PCB with components")
-reference.Shape = Part.read(str((ROOT / P["pcb_reference"]).resolve()))
-reference.Placement.Base = App.Vector((W - 25) / 2, (H + 25) / 2, seam)
+reference.Shape = Part.read(str(pcb_step))
+reference.Placement.Base = pcb_origin
 DOC.recompute()
 
 fasteners = []
-for index, (x, y) in enumerate(P["mounts"]):
-    fastener = feature("Part::Feature", "REFERENCE - M2 x 12 CSK screw %d" % (index + 1))
-    fastener.Shape = Part.makeCone(1.9, 1.0, 0.9, App.Vector(x, y, 0)).fuse(
-        Part.makeCylinder(1, P["screw_length"] - 0.9, App.Vector(x, y, 0.9)))
+screw_r, screw_head_r = 1.0, 2.0
+screw_head_depth = screw_head_r - screw_r
+for hole, (x, y) in zip(pcb_holes, mounts):
+    fastener = feature("Part::Feature", "REFERENCE - M2 CSK screw for " + hole["ref"])
+    fastener.Shape = Part.makeCone(screw_head_r, screw_r, screw_head_depth,
+                                   App.Vector(x, y, 0)).fuse(
+        Part.makeCylinder(screw_r, P["screw_length"] - screw_head_depth,
+                          App.Vector(x, y, screw_head_depth)))
     fasteners.append(fastener)
 DOC.recompute()
 
@@ -269,6 +296,62 @@ failures = []
 def bounds(shape):
     b = shape.BoundBox
     return [round(v, 5) for v in [b.XMin, b.YMin, b.ZMin, b.XMax, b.YMax, b.ZMax]]
+
+
+def bore_faces(shape, radius, z_min, z_max):
+    """Find the cylindrical faces through the specified thickness or depth."""
+    matches = []
+    for face in shape.Faces:
+        surface = face.Surface
+        if (isinstance(surface, Part.Cylinder) and abs(abs(surface.Axis.z) - 1) < 1e-6
+                and abs(surface.Radius - radius) < 1e-5
+                and abs(face.BoundBox.ZMin - z_min) < 1e-5
+                and abs(face.BoundBox.ZMax - z_max) < 1e-5):
+            matches.append(face)
+    return matches
+
+
+# Test the actual STEP substrate, finished rear holes and front pilot faces.
+# A solid-intersection check alone cannot spot a screw missing a PCB hole.
+substrate = max(reference.Shape.Solids, key=lambda solid: solid.Volume)
+substrate_bounds = substrate.BoundBox
+pilot_r = P["screw_pilot_diameter"] / 2
+pilot_depth = P["screw_pilot_depth"]
+rear_bores = bore_faces(rear.Shape, screw_clearance_r, countersink_depth, seam)
+front_bores = bore_faces(front.Shape, pilot_r, board_top, board_top + pilot_depth)
+report["screw_alignment"] = {}
+for hole, xy, screw in zip(pcb_holes, mounts, fasteners):
+    ref = hole["ref"]
+    pcb_bores = bore_faces(substrate, hole["diameter"] / 2,
+                           substrate_bounds.ZMin, substrate_bounds.ZMax)
+    alignment = {"target_xy_mm": [round(value, 5) for value in xy]}
+    for name, bores in (("rear_clearance", rear_bores), ("pcb_drill", pcb_bores),
+                        ("front_pilot", front_bores)):
+        nearest = min(bores, key=lambda face: math.dist(tuple(face.Surface.Center)[:2], xy), default=None)
+        if nearest is None:
+            failures.append(f"Missing {name} bore for {ref}")
+            continue
+        measured_xy = tuple(nearest.Surface.Center)[:2]
+        offset = math.dist(measured_xy, xy)
+        alignment[name] = {"xy_mm": [round(value, 5) for value in measured_xy],
+                           "axis_offset_mm": round(offset, 6),
+                           "diameter_mm": round(nearest.Surface.Radius * 2, 5)}
+        if offset > 1e-5:
+            failures.append(f"Misaligned {name} bore for {ref}: {offset:.3f} mm")
+        if name == "front_pilot":
+            thread_arc = nearest.Area / (pilot_r * pilot_depth) * 180 / math.pi
+            alignment[name]["supported_arc_degrees"] = round(thread_arc, 2)
+            if thread_arc < 240:
+                failures.append(f"Insufficient front pilot wall for {ref}")
+    obstructions = {name: screw.Shape.common(shape).Volume for name, shape in
+                    (("rear_cover", rear.Shape), ("pcb_assembly", reference.Shape),
+                     ("mixing_cup", cup.Shape))}
+    alignment["screw_interference_mm3"] = {name: round(volume, 8) for name, volume in obstructions.items()}
+    if any(volume > 1e-5 for volume in obstructions.values()):
+        failures.append(f"M2 screw path obstructed for {ref}")
+    report["screw_alignment"][ref] = alignment
+if not (board_top < P["screw_length"] < board_top + pilot_depth):
+    failures.append("Screw length does not engage the pilot with tip clearance")
 
 
 for name, obj in parts.items():
@@ -347,6 +430,14 @@ for distance in (0.2, 1, 2, 4, 8, 16, 25):
     report["rear_removal_sweep"].append({"distance": distance, "interference_mm3": round(volume, 8)})
     if volume > 1e-5:
         failures.append("Assembly path blocked at " + str(distance))
+
+# This cylinder bounds every position of the cup below its seated rim and
+# checks clearance between the sampled positions in the removal sweep.
+optics_passage = Part.makeCylinder(optics_passage_r, cup_z + 1, App.Vector(cx, cy, -1))
+optics_passage_interference = front.Shape.common(optics_passage).Volume
+report["optics_passage_interference_mm3"] = round(optics_passage_interference, 8)
+if optics_passage_interference > 1e-5:
+    failures.append("Optical stack passage obstructed")
 
 report["optics_rear_removal_sweep"] = []
 for name, obj in {"mixing_cup": cup, **optics}.items():

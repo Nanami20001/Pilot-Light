@@ -1,10 +1,19 @@
 # SL25 Rev B CH552G 固件
 
-这是用于焊后硬件检查的最小测试程序：上电后让中心 WS2812B-V5 依次显示红、绿、蓝、黄。LED 数据脚为 CH552G 的 P1.5（物理脚 3）。它不包含 USB HID 或电脑状态控制协议。
+这是用于焊后硬件检查的最小测试程序：上电后让中心 WS2812B-V5 持续显示全亮白光（R=G=B=255）。LED 数据脚为 CH552G 的 P1.5（物理脚 3）。它不包含 USB HID 或电脑状态控制协议。程序已按 CH552 的 P1.5 GPIO 寄存器和 24 MHz 内部时钟配置。
+
+该程序循环发送全白帧。以 24 MHz 指令模型计算，帧内逻辑 1 的低电平为 375 ns，低于当前 RGB 诊断采用的 580 ns 下限。首次点灯请用 `../ch552_led_diagnostic/build/sl25_led_diagnostic.hex`。全白程序供台架实验使用，满亮时应观察整机电流和温升。
 
 ## 编译
 
-从 WCH 的 CH55X EVT 中取得 `CH552.H`/启动文件，使用 SDCC 编译。不同版本 EVT 的启动文件和时钟初始化名称可能不同，因此本目录提供的是核心 `main.c`，需放入对应 EVT 示例工程中构建。编译结果应为 `.hex` 文件。
+使用 SDCC 编译：
+
+```powershell
+cd firmware/ch552_ws2812_demo
+.\Makefile.ps1
+```
+
+默认输出为 `build-white/sl25_ws2812_white.hex`。也可以手工把 `main.c` 放入 WCH CH55X EVT 工程构建。
 
 ## 烧录
 

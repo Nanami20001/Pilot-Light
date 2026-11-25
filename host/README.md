@@ -6,13 +6,13 @@
 
 | 状态 | 灯光 | 含义 |
 | --- | --- | --- |
-| `working` | 绿色呼吸 | Codex 有一个 `inProgress` 回合 |
-| `waiting` | 黄色呼吸 | 回合被中断，或等待用户输入/审批 |
-| `error` | 红色闪烁 | 最近回合 `failed`，或本地状态读取出错 |
+| `working` | 黄色常亮 | Codex 有一个 `inProgress` 回合 |
+| `waiting` | 黄色双闪 | 回合被中断，或等待用户输入/审批 |
+| `error` | 红色快闪 | 最近回合 `failed`，或本地状态读取出错 |
 | `ready` | 暗绿色常亮 | Codex 在线，但当前没有运行中的回合，或最近回合已完成 |
 | `offline` | 熄灭 | Codex 进程不在线 |
 
-绿色表示“正常/正在推进”，黄色表示“需要人处理”，红色表示“需要排障”。呼吸和闪烁由 `firmware/ch552_codex_status/` 中的最终固件实现。
+主机代理将工作中映射为黄色常亮。等待时黄灯每两秒短闪两下，报错时红灯每秒闪两下。电脑端控制闪烁节奏。
 
 ## 测试状态读取
 
@@ -36,9 +36,11 @@ node host/codex_status_agent.mjs --dry-run --state-file .\codex-status.json --on
 
 ```powershell
 cd host
-npm install
+npm ci
 node codex_status_agent.mjs --vid 0xF055 --pid 0x2525 --verbose
 ```
+
+依赖安装完成后，Windows 可在项目根目录运行 `启动状态灯.cmd`。
 
 也可以用 `--path` 直接指定 HID 设备路径。node-hid 写入时发送 9 字节，其中报告 ID 为 0，设备收到 8 字节有效载荷：
 

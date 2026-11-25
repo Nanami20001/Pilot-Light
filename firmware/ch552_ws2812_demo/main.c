@@ -1,76 +1,715 @@
-/* SL25 Rev B - CH552G minimal WS2812B-V5 test firmware
- * Build with SDCC and the CH552 device headers from WCH CH55X EVT.
- * LED data: U1 pin 3 = P1.5, through R3 (330 ohm).
- * This intentionally has no USB application protocol: it cycles colors
- * so the assembled hardware can be verified before a host-control firmware.
- */
-#include <stdint.h>
-
-typedef unsigned char u8;
-typedef unsigned int  u16;
-
-__sfr __at (0x90) P1;
-__sfr __at (0x91) P1M1;
-__sfr __at (0x92) P1M0;
-__sbit __at (0x95) LED_DATA;       /* P1.5 */
-__sbit __at (0xAF) EA;              /* IE.7, global interrupt enable */
-
+/* SL25 Rev B: CH552G + WS2812B-V5, P1.5, full-white test. */
+typedef unsigned int u16;
+__sfr __at (0x92) P1_MOD_OC;
+__sfr __at (0x93) P1_DIR_PU;
+__sfr __at (0xA1) SAFE_MOD;
+__sfr __at (0xB9) CLOCK_CFG;
+__sbit __at (0x95) LED_DATA;
+__sbit __at (0xAF) EA;
 static void delay_ms(u16 ms)
 {
-    u16 i;
+    volatile u16 i;
     while (ms--) {
-        for (i = 0; i < 240; ++i) {
+        for (i = 0; i < 1000; ++i) {
             __asm nop __endasm;
         }
     }
 }
-
-/* Approximate 800 kHz WS2812 waveform at the CH552 24 MHz internal clock.
- * Keep this routine in code memory and do not enable interrupts while sending.
+/* GRB=FF FF FF: 24 one bits, unrolled to avoid compiler overhead.
+ * At 24MHz: NOP=1 cycle, SETB/CLR bit=2 cycles.
+ * Nominal T1H=875ns, T1L=375ns. Verify with a scope on hardware.
  */
-static void ws_bit(u8 one)
+static void ws_white(void)
 {
-    LED_DATA = 1;
-    if (one) {
-        __asm nop; nop; nop; nop; nop; nop; nop; nop; nop; nop; __endasm;
-        LED_DATA = 0;
-        __asm nop; nop; nop; nop; __endasm;
-    } else {
-        __asm nop; nop; nop; __endasm;
-        LED_DATA = 0;
-        __asm nop; nop; nop; nop; nop; nop; nop; nop; nop; nop; __endasm;
-    }
+    __asm
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        setb _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        clr _LED_DATA
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+    __endasm;
 }
-
-static void ws_byte(u8 v)
-{
-    u8 b;
-    for (b = 0x80; b; b >>= 1) ws_bit((v & b) != 0);
-}
-
-static void ws_color(u8 r, u8 g, u8 b)
-{
-    /* WS2812B expects GRB, MSB first. */
-    EA = 0;
-    ws_byte(g); ws_byte(r); ws_byte(b);
-    LED_DATA = 0;
-    EA = 1;
-    delay_ms(1);                    /* reset low >280 us */
-}
-
 void main(void)
 {
-    P1M1 &= ~(1 << 5);              /* push-pull output */
-    P1M0 |=  (1 << 5);
+    EA = 0;
+    SAFE_MOD = 0x55;
+    SAFE_MOD = 0xAA;
+    CLOCK_CFG = 0x86; /* internal oscillator, 24MHz */
+    SAFE_MOD = 0x00;
     LED_DATA = 0;
+    P1_MOD_OC &= ~0x20; /* push-pull */
+    P1_DIR_PU |= 0x20; /* output */
+    delay_ms(10); /* LED power-up settling */
     while (1) {
-        ws_color(255, 0, 0);        /* red */
-        delay_ms(700);
-        ws_color(0, 255, 0);        /* green */
-        delay_ms(700);
-        ws_color(0, 0, 255);        /* blue */
-        delay_ms(700);
-        ws_color(255, 180, 0);       /* yellow */
-        delay_ms(700);
+        ws_white();
+        LED_DATA = 0;
+        delay_ms(10); /* reset >280us; refresh same white frame */
     }
 }

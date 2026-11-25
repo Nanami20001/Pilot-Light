@@ -22,3 +22,7 @@ firmware/ch552_codex_status/*.rel
 firmware/ch552_codex_status/*.rst
 firmware/ch552_codex_status/*.sym
 firmware/ch552_codex_status/*.dumpcustom*
+firmware/ch552_led_diagnostic/build/
+firmware/ch552_ws2812_demo/build-white/
+firmware/archive/
+host/node_modules/

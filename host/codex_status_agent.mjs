@@ -34,7 +34,7 @@ export const EFFECTS = Object.freeze({
 
 const COLORS = Object.freeze({
   offline: [0, 0, 0],
-  working: [0, 180, 0],
+  working: [220, 150, 0],
   waiting: [220, 150, 0],
   ready: [0, 70, 0],
   error: [220, 0, 0],
@@ -42,6 +42,7 @@ const COLORS = Object.freeze({
 
 const DEFAULT_INTERVAL_MS = 1000;
 const DEFAULT_BRIGHTNESS = 96;
+const FRAME_MS = 50;
 
 function parseArgs(argv) {
   const options = {
@@ -94,15 +95,15 @@ export function classifyTurn(turn, codexRunning = true) {
 
   switch (String(turn.status)) {
     case "inProgress":
-      return { name: "working", state: STATES.WORKING, effect: EFFECTS.BREATHE };
+      return { name: "working", state: STATES.WORKING, effect: EFFECTS.SOLID };
     case "failed":
       return { name: "error", state: STATES.ERROR, effect: EFFECTS.BLINK };
     case "interrupted":
-      return { name: "waiting", state: STATES.WAITING, effect: EFFECTS.BREATHE };
+      return { name: "waiting", state: STATES.WAITING, effect: EFFECTS.BLINK };
     case "completed":
       return { name: "ready", state: STATES.READY, effect: EFFECTS.SOLID };
     default:
-      return { name: "waiting", state: STATES.WAITING, effect: EFFECTS.BREATHE };
+      return { name: "waiting", state: STATES.WAITING, effect: EFFECTS.BLINK };
   }
 }
 
@@ -133,12 +134,36 @@ function latestTurn(home) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    return db.prepare(`
-      SELECT thread_id, turn_id, status, started_at, completed_at, error_json
-      FROM thread_turns
-      ORDER BY COALESCE(started_at, 0) DESC, COALESCE(completed_at, 0) DESC
-      LIMIT 1
-    `).get() || null;
+    const statePath = path.join(home, "state_5.sqlite");
+    const hasMetadata = fs.existsSync(statePath);
+    if (hasMetadata) {
+      db.exec("PRAGMA query_only = ON");
+      db.prepare("ATTACH DATABASE ? AS metadata").run(statePath);
+    }
+    const turns = db.prepare(`
+      SELECT t.thread_id, t.status
+      FROM thread_turns AS t
+      ${hasMetadata ? `LEFT JOIN metadata.threads AS m ON m.id = t.thread_id
+        WHERE COALESCE(m.archived, 0) = 0
+          AND COALESCE(m.source, '') NOT LIKE '%"subagent"%'` : ""}
+      ORDER BY COALESCE(t.started_at, 0) DESC, t.rollout_ordinal DESC
+    `);
+    const lockDir = path.join(home, "thread-writer-locks");
+    const hasLocks = fs.existsSync(lockDir);
+    const seen = new Set();
+    let latest = null;
+    for (const turn of turns.iterate()) {
+      if (seen.has(turn.thread_id)) continue;
+      seen.add(turn.thread_id);
+      // A crashed or closed chat can leave an inProgress row in history.
+      if (turn.status === "inProgress" && hasLocks) {
+        if (fs.existsSync(path.join(lockDir, turn.thread_id + ".lock"))) return turn;
+        continue;
+      }
+      latest ??= turn;
+      if (!hasLocks) break;
+    }
+    return latest;
   } catch (error) {
     return { status: "failed", error_json: JSON.stringify({ message: error.message }) };
   } finally {
@@ -186,9 +211,24 @@ export function readCodexStatus(options = {}) {
 
 export function makeReport(status, sequence, brightness = DEFAULT_BRIGHTNESS) {
   const color = COLORS[status.name] || COLORS.offline;
-  // Byte 0 is the HID report ID. The remaining bytes are the SL25 payload:
-  // state, effect, brightness, R, G, B, sequence, reserved.
-  return [0, status.state, status.effect, brightness, ...color, sequence & 0xff, 0];
+  // node-hid requires the report-ID byte at index 0.  The HID descriptor has
+  // no Report ID item, so the required value is zero; the firmware receives
+  // the following eight-byte SL25 payload.
+  // Rev B selects the LED color by wire state. Its WAITING palette is yellow.
+  const wireState = status.state === STATES.WORKING ? STATES.WAITING : status.state;
+  return [0, wireState, status.effect, brightness, ...color, sequence & 0xff, 0];
+}
+
+export function makeBlinkFrame(status, sequence, brightness = DEFAULT_BRIGHTNESS, elapsedMs = 0) {
+  let on;
+  if (status.state === STATES.WAITING) {
+    const phase = elapsedMs % 2000;
+    on = phase < 200 || (phase >= 400 && phase < 600);
+  } else {
+    const period = status.state === STATES.ERROR ? 500 : 1000;
+    on = elapsedMs % period < period / 2;
+  }
+  return makeReport({ ...status, effect: EFFECTS.SOLID }, sequence, on ? brightness : 0);
 }
 
 function loadHid(options) {
@@ -214,9 +254,9 @@ function printHelp() {
   node host/codex_status_agent.mjs --vid 0xVVVV --pid 0xPPPP
 
 颜色策略:
-  绿灯呼吸 = Codex 正在工作
-  黄灯呼吸 = 等待用户输入/审批，或任务被中断
-  红灯闪烁 = Codex 回合失败
+  黄灯常亮 = Codex 正在工作
+  黄灯双闪 = 等待用户输入/审批，或任务被中断
+  红灯快闪 = Codex 回合失败
   绿灯常亮 = Codex 在线且空闲/已完成
   熄灭     = Codex 不在线
 
@@ -228,19 +268,33 @@ export async function run(options) {
   const device = loadHid(options);
   let sequence = 0;
   let last;
+  let blinkStarted = 0;
+  let frames;
+  const writeFrame = () => {
+    device.write(makeBlinkFrame(last, sequence++, options.brightness, performance.now() - blinkStarted));
+  };
   const send = () => {
     const status = readCodexStatus(options);
-    const report = makeReport(status, sequence++, options.brightness);
-    if (options.dryRun) {
-      if (options.verbose || !last || last.name !== status.name) {
+    const changed = last?.name !== status.name;
+    last = status;
+    if (changed) {
+      clearInterval(frames);
+      frames = undefined;
+      if (device && !options.once && status.effect === EFFECTS.BLINK) {
+        blinkStarted = performance.now();
+        frames = setInterval(writeFrame, FRAME_MS);
+      }
+    }
+    if (frames) {
+      if (changed) writeFrame();
+    } else {
+      const report = makeReport(status, sequence++, options.brightness);
+      if (device) device.write(report);
+      else if (options.verbose || changed) {
         console.log(JSON.stringify({ ...status, report, at: new Date().toISOString() }));
       }
-    } else {
-      device.write(report);
-      if (options.verbose && (!last || last.name !== status.name)) console.log(`状态: ${status.name}`);
     }
-    last = status;
-    return status;
+    if (device && options.verbose && changed) console.log(`状态: ${status.name}`);
   };
 
   send();
@@ -251,6 +305,7 @@ export async function run(options) {
   const timer = setInterval(send, options.intervalMs);
   const stop = () => {
     clearInterval(timer);
+    clearInterval(frames);
     try {
       device?.write(makeReport({ name: "offline", state: STATES.OFFLINE, effect: EFFECTS.SOLID }, sequence++, 0));
       device?.close();
